@@ -33,13 +33,16 @@ plivoRoutes.post("/inbound", (req, res) => {
 
   const wsUrl = config.publicBaseUrl.replace("https://", "wss://").replace("http://", "ws://") + "/voice-stream";
 
+  // Plivo Stream XML — URL must be clean, no query params that might break parsing
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Stream bidirectional="true" keepCallAlive="true" streamTimeout="3600" contentType="audio/x-mulaw;rate=8000" audioTrack="both" statusCallbackUrl="${config.publicBaseUrl}/plivo/stream-status">${wsUrl}?callUuid=${CallUUID}&amp;from=${encodeURIComponent(From)}&amp;to=${encodeURIComponent(To)}</Stream>
+  <Stream bidirectional="true" keepCallAlive="true" streamTimeout="3600" contentType="audio/x-mulaw;rate=8000" audioTrack="both">${wsUrl}</Stream>
 </Response>`;
 
   res.set("Content-Type", "application/xml");
   res.send(xml);
+
+  logger.info({ xml, wsUrl }, "Sent Stream XML to Plivo");
 });
 
 /**
