@@ -50,13 +50,12 @@ plivoRoutes.post("/inbound", async (req, res) => {
   });
 
   // Respond INSTANTLY with Polly greeting (no TTS generation delay).
-  // This keeps Plivo's answer webhook fast so the call connects reliably.
-  // The actual AI conversation uses natural OpenAI TTS (in /handle-speech).
+  // Using Polly.Kajal (newer, more natural Hindi voice) instead of Polly.Aditi
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Speak voice="Polly.Aditi" language="hi-IN">Namaste! Codeskate mein aapka swagat hai. Boliye, main aapki kaise madad karoon?</Speak>
+  <Speak voice="Polly.Kajal" language="hi-IN">Namaste! Codeskate mein aapka swaagat hai. Boliye, main aapki kaise madad karoon?</Speak>
   <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${CallUUID}" method="POST" maxLength="30" timeout="3" finishOnKey="#" recordSession="false" redirect="true" />
-  <Speak voice="Polly.Aditi" language="hi-IN">Kya aap kuch kehna chahte hain?</Speak>
+  <Speak voice="Polly.Kajal" language="hi-IN">Kya aap kuch kehna chahte hain?</Speak>
   <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${CallUUID}" method="POST" maxLength="30" timeout="5" finishOnKey="#" recordSession="false" redirect="true" />
 </Response>`;
 

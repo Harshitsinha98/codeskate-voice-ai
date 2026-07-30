@@ -48,8 +48,12 @@ export async function transcribeFromUrl(recordingUrl) {
     const response = await openai.audio.transcriptions.create({
       model: "whisper-1",
       file,
-      language: config.agent.language.split("-")[0], // "hi" from "hi-IN"
+      // Use English mode — Whisper transcribes Hinglish/Hindi as romanized text
+      // which GPT understands better than garbled Devanagari from phone audio.
+      // Indian business calls are usually Hinglish (mix of Hindi + English).
+      language: "en",
       response_format: "text",
+      prompt: "This is a phone call in Hinglish (Hindi + English mix). Common words: subscription, plan, pricing, growth, starter, enterprise, CRM, WhatsApp, lead, follow-up, agent, hello, haan, nahi, theek hai, kitna, chahiye, karna hai, batao",
     });
 
     const text = typeof response === "string" ? response.trim() : response?.text?.trim() || "";
