@@ -72,3 +72,66 @@ function cleanupCache() {
     }
   }
 }
+
+
+
+/**
+ * Synthesize speech and return raw mulaw buffer (for WebSocket streaming mode).
+ * Used by voiceStreamHandler.js to send audio directly over WebSocket.
+ */
+export async function synthesizeSpeech(text) {
+  try {
+    if (!text || text.trim().length === 0) return null;
+
+    const response = await openai.audio.speech.create({
+      model: "tts-1",
+      voice: config.agent.voice,
+      input: text,
+      response_format: "pcm", // Raw PCM 24kHz 16-bit mono
+      speed: 1.1,
+    });
+
+    const arrayBuffer = await response.arrayBuffer();
+    const pcm24k = Buffer.from(arrayBuffer);
+
+    // Downsample 24kHz → 8kHz and encode as mulaw for Plivo
+    return pcm24kToMulaw8k(pcm24k);
+  } catch (err) {
+    logger.error({ err: err.message }, "synthesizeSpeech failed");
+    return null;
+  }
+}
+
+/**
+ * Convert PCM 24kHz 16-bit mono → mulaw 8kHz mono.
+ */
+function pcm24kToMulaw8k(pcm24k) {
+  const sampleCount24k = pcm24k.length / 2;
+  const downsampleFactor = 3;
+  const sampleCount8k = Math.floor(sampleCount24k / downsampleFactor);
+  const mulaw = Buffer.alloc(sampleCount8k);
+
+  for (let i = 0; i < sampleCount8k; i++) {
+    const srcIndex = i * downsampleFactor * 2;
+    if (srcIndex + 1 >= pcm24k.length) break;
+    const sample = pcm24k.readInt16LE(srcIndex);
+    mulaw[i] = linearToMulaw(sample);
+  }
+  return mulaw;
+}
+
+function linearToMulaw(sample) {
+  const MULAW_MAX = 0x1FFF;
+  const MULAW_BIAS = 33;
+  const sign = (sample >> 8) & 0x80;
+  if (sign !== 0) sample = -sample;
+  if (sample > MULAW_MAX) sample = MULAW_MAX;
+  sample += MULAW_BIAS;
+
+  let exponent = 7;
+  let mask = 0x4000;
+  while (exponent > 0 && (sample & mask) === 0) { exponent--; mask >>= 1; }
+
+  const mantissa = (sample >> (exponent + 3)) & 0x0F;
+  return ~(sign | (exponent << 4) | mantissa) & 0xFF;
+}
