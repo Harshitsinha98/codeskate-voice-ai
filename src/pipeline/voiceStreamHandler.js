@@ -115,26 +115,26 @@ export function handleVoiceStream(ws) {
   /** Generate TTS and stream it to Plivo via playAudio. */
   async function speak(text) {
     try {
-      const mulaw = await synthesizeSpeech(text); // returns mulaw 8kHz buffer
-      if (!mulaw || ws.readyState !== 1) return;
+      const pcm = await synthesizeSpeech(text); // returns L16 PCM 8kHz buffer
+      if (!pcm || ws.readyState !== 1) return;
 
       isSpeaking = true;
-      // Send as ONE playAudio event (Plivo buffers and plays it).
+      // Send as ONE playAudio event. Format MUST match Plivo stream: audio/x-l16 @ 8kHz.
       const msg = JSON.stringify({
         event: "playAudio",
         media: {
-          contentType: "audio/x-mulaw",
+          contentType: "audio/x-l16",
           sampleRate: 8000,
-          payload: mulaw.toString("base64"),
+          payload: pcm.toString("base64"),
         },
       });
       ws.send(msg);
 
-      // Estimate playback duration to release isSpeaking (mulaw 8kHz = 8000 bytes/sec)
-      const durationMs = Math.ceil((mulaw.length / 8000) * 1000);
+      // L16 8kHz = 16000 bytes/sec. Estimate playback duration to release isSpeaking.
+      const durationMs = Math.ceil((pcm.length / 16000) * 1000);
       setTimeout(() => { isSpeaking = false; }, durationMs + 300);
 
-      logger.info({ bytes: mulaw.length, durationMs, callUuid }, "Sent playAudio");
+      logger.info({ bytes: pcm.length, durationMs, callUuid }, "Sent playAudio (L16)");
     } catch (err) {
       logger.error({ err: err.message }, "speak() failed");
       isSpeaking = false;

@@ -88,14 +88,14 @@ export async function synthesizeSpeech(text) {
       voice: config.agent.voice,
       input: text,
       response_format: "pcm", // Raw PCM 24kHz 16-bit mono
-      speed: 1.1,
+      speed: 1.05,
     });
 
     const arrayBuffer = await response.arrayBuffer();
     const pcm24k = Buffer.from(arrayBuffer);
 
-    // Downsample 24kHz → 8kHz and encode as mulaw for Plivo
-    return pcm24kToMulaw8k(pcm24k);
+    // Plivo stream is "audio/x-l16" at 8kHz → downsample 24kHz→8kHz, keep 16-bit PCM
+    return pcm24kToL16_8k(pcm24k);
   } catch (err) {
     logger.error({ err: err.message }, "synthesizeSpeech failed");
     return null;
@@ -103,35 +103,20 @@ export async function synthesizeSpeech(text) {
 }
 
 /**
- * Convert PCM 24kHz 16-bit mono → mulaw 8kHz mono.
+ * Convert PCM 24kHz 16-bit mono → L16 PCM 8kHz 16-bit mono (little-endian).
+ * Plivo bidirectional stream uses "audio/x-l16" at 8kHz.
  */
-function pcm24kToMulaw8k(pcm24k) {
-  const sampleCount24k = pcm24k.length / 2;
-  const downsampleFactor = 3;
+function pcm24kToL16_8k(pcm24k) {
+  const sampleCount24k = Math.floor(pcm24k.length / 2);
+  const downsampleFactor = 3; // 24000 / 8000
   const sampleCount8k = Math.floor(sampleCount24k / downsampleFactor);
-  const mulaw = Buffer.alloc(sampleCount8k);
+  const out = Buffer.alloc(sampleCount8k * 2);
 
   for (let i = 0; i < sampleCount8k; i++) {
     const srcIndex = i * downsampleFactor * 2;
     if (srcIndex + 1 >= pcm24k.length) break;
     const sample = pcm24k.readInt16LE(srcIndex);
-    mulaw[i] = linearToMulaw(sample);
+    out.writeInt16LE(sample, i * 2);
   }
-  return mulaw;
-}
-
-function linearToMulaw(sample) {
-  const MULAW_MAX = 0x1FFF;
-  const MULAW_BIAS = 33;
-  const sign = (sample >> 8) & 0x80;
-  if (sign !== 0) sample = -sample;
-  if (sample > MULAW_MAX) sample = MULAW_MAX;
-  sample += MULAW_BIAS;
-
-  let exponent = 7;
-  let mask = 0x4000;
-  while (exponent > 0 && (sample & mask) === 0) { exponent--; mask >>= 1; }
-
-  const mantissa = (sample >> (exponent + 3)) & 0x0F;
-  return ~(sign | (exponent << 4) | mantissa) & 0xFF;
+  return out;
 }
