@@ -56,15 +56,10 @@ export function handleVoiceStream(ws) {
         const payload = msg.media?.payload;
         if (!payload) break;
 
-        // Barge-in: if AI is speaking and caller starts talking, stop AI audio
-        if (isSpeaking) {
-          const chunk = Buffer.from(payload, "base64");
-          if (hasSignificantAudio(chunk)) {
-            clearPlayback();
-          }
-          break;
-        }
-        if (isProcessing) break;
+        // While AI is speaking, IGNORE incoming audio entirely (no barge-in).
+        // Barge-in was clearing our own greeting due to line noise/echo.
+        // Simpler + reliable: let AI finish, then listen.
+        if (isSpeaking || isProcessing) break;
 
         audioBuffer.push(payload);
         if (silenceTimer) clearTimeout(silenceTimer);
