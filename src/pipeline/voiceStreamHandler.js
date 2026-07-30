@@ -1,110 +1,153 @@
 /**
- * Voice Stream Handler — bridges Plivo audio stream to AI pipeline.
- * With detailed logging to debug audio playback issues.
+ * Voice Stream Handler — real-time bidirectional audio with Plivo.
+ *
+ * Uses the EXACT Plivo Audio Streaming protocol:
+ *   IN (from Plivo):
+ *     - start:  { event, start: { callId, streamId, mediaFormat: { encoding, sampleRate } } }
+ *     - media:  { event, media: { payload (base64) } }
+ *     - stop:   { event }
+ *   OUT (to Plivo):
+ *     - playAudio: { event: "playAudio", media: { contentType, sampleRate, payload } }
+ *     - clearAudio: { event: "clearAudio", streamId }   (barge-in / interrupt)
+ *
+ * Pipeline: collect audio -> silence detect -> STT -> GPT -> TTS -> playAudio.
  */
 
 import { logger } from "../config/logger.js";
-import { config } from "../config/env.js";
 import { transcribeAudio } from "./stt.js";
 import { generateResponse } from "./llm.js";
 import { synthesizeSpeech } from "./tts.js";
 import { getAgentConfig } from "../services/agentConfig.js";
 import { appendTranscript } from "../services/callLogger.js";
 
-const SILENCE_THRESHOLD_MS = 1500;
+// Lower silence threshold = faster response (was 1500). 700ms feels snappy.
+const SILENCE_THRESHOLD_MS = 700;
+const MIN_SPEECH_BYTES = 4000; // ignore tiny blips (~0.25s)
 
 export function handleVoiceStream(ws) {
   let audioBuffer = [];
   let silenceTimer = null;
   let isProcessing = false;
   let isSpeaking = false;
-  let conversationHistory = [];
+  let streamId = null;
   let callUuid = null;
-  let streamSid = null;
+  let mediaFormat = { encoding: "audio/x-mulaw", sampleRate: 8000 };
+  const conversation = [];
 
-  const agentConfig = getAgentConfig();
-  conversationHistory.push({ role: "system", content: agentConfig.systemPrompt });
+  const agent = getAgentConfig();
+  conversation.push({ role: "system", content: agent.systemPrompt });
 
   ws.on("message", async (data) => {
-    try {
-      const msg = JSON.parse(data.toString());
+    let msg;
+    try { msg = JSON.parse(data.toString()); } catch { return; }
 
-      switch (msg.event) {
-        case "start":
-          // Log the FULL start message to understand Plivo's format
-          streamSid = msg.start?.streamSid || msg.streamSid || msg.start?.stream_id;
-          callUuid = msg.start?.callId || msg.start?.customParameters?.callUuid || msg.start?.from;
-          logger.info({ streamSid, callUuid, startMsg: JSON.stringify(msg).slice(0, 500) }, "Audio stream started — FULL start event");
-          // Send greeting
-          await sendGreeting(ws, streamSid);
-          break;
-
-        case "media":
-          if (isProcessing || isSpeaking) break;
-          if (msg.media?.payload) audioBuffer.push(msg.media.payload);
-          if (silenceTimer) clearTimeout(silenceTimer);
-          silenceTimer = setTimeout(() => processUserSpeech(), SILENCE_THRESHOLD_MS);
-          break;
-
-        case "stop":
-          logger.info({ streamSid }, "Audio stream stopped");
-          cleanup();
-          break;
-
-        default:
-          // Log any unknown events to understand Plivo's protocol
-          logger.info({ event: msg.event, keys: Object.keys(msg) }, "Unknown stream event");
-          break;
+    switch (msg.event) {
+      case "start": {
+        streamId = msg.start?.streamId || msg.streamId;
+        callUuid = msg.start?.callId || null;
+        if (msg.start?.mediaFormat) mediaFormat = msg.start.mediaFormat;
+        logger.info({ streamId, callUuid, mediaFormat }, "Stream started");
+        // Greet immediately
+        await speak(agent.greeting || "Hello, Codeskate se Priya bol rahi hoon. Boliye, kaise help karoon?");
+        break;
       }
-    } catch (err) {
-      logger.error({ err: err.message, raw: data.toString().slice(0, 200) }, "Stream message error");
+
+      case "media": {
+        const payload = msg.media?.payload;
+        if (!payload) break;
+
+        // Barge-in: if AI is speaking and caller starts talking, stop AI audio
+        if (isSpeaking) {
+          const chunk = Buffer.from(payload, "base64");
+          if (hasSignificantAudio(chunk)) {
+            clearPlayback();
+          }
+          break;
+        }
+        if (isProcessing) break;
+
+        audioBuffer.push(payload);
+        if (silenceTimer) clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(processTurn, SILENCE_THRESHOLD_MS);
+        break;
+      }
+
+      case "stop":
+        logger.info({ streamId }, "Stream stopped");
+        cleanup();
+        break;
     }
   });
 
   ws.on("close", () => { logger.info({ callUuid }, "WebSocket closed"); cleanup(); });
   ws.on("error", (err) => { logger.error({ err: err.message }, "WebSocket error"); cleanup(); });
 
-  async function processUserSpeech() {
-    if (audioBuffer.length === 0 || isProcessing) return;
+  async function processTurn() {
+    if (isProcessing || audioBuffer.length === 0) return;
     isProcessing = true;
-    const chunks = [...audioBuffer];
+    const chunks = audioBuffer;
     audioBuffer = [];
 
     try {
-      const rawAudio = Buffer.concat(chunks.map((b64) => Buffer.from(b64, "base64")));
-      logger.info({ audioSize: rawAudio.length, callUuid }, "Processing user speech");
+      const raw = Buffer.concat(chunks.map((b) => Buffer.from(b, "base64")));
+      if (raw.length < MIN_SPEECH_BYTES) { isProcessing = false; return; }
 
-      if (rawAudio.length < 1600) {
-        logger.debug({ size: rawAudio.length }, "Audio too short, skipping");
-        isProcessing = false;
-        return;
-      }
-
-      const userText = await transcribeAudio(rawAudio);
-      if (!userText) {
-        logger.debug("Whisper returned empty, skipping");
-        isProcessing = false;
-        return;
-      }
+      const userText = await transcribeAudio(raw, mediaFormat);
+      if (!userText || userText.trim().length < 2) { isProcessing = false; return; }
 
       logger.info({ userText, callUuid }, "User said");
       appendTranscript(callUuid, "user", userText);
 
-      conversationHistory.push({ role: "user", content: userText });
-      const aiResponse = await generateResponse(conversationHistory);
-      conversationHistory.push({ role: "assistant", content: aiResponse });
+      conversation.push({ role: "user", content: userText });
+      const reply = await generateResponse(conversation);
+      conversation.push({ role: "assistant", content: reply });
 
-      logger.info({ aiResponse: aiResponse.slice(0, 100), callUuid }, "AI response");
-      appendTranscript(callUuid, "assistant", aiResponse);
+      logger.info({ reply: reply.slice(0, 80), callUuid }, "AI reply");
+      appendTranscript(callUuid, "assistant", reply);
 
-      isSpeaking = true;
-      await streamTTSToPlivo(ws, streamSid, aiResponse);
-      isSpeaking = false;
+      await speak(reply);
     } catch (err) {
-      logger.error({ err: err.message, callUuid }, "Pipeline error");
-      isSpeaking = false;
+      logger.error({ err: err.message, callUuid }, "Turn processing error");
     }
     isProcessing = false;
+  }
+
+  /** Generate TTS and stream it to Plivo via playAudio. */
+  async function speak(text) {
+    try {
+      const mulaw = await synthesizeSpeech(text); // returns mulaw 8kHz buffer
+      if (!mulaw || ws.readyState !== 1) return;
+
+      isSpeaking = true;
+      // Send as ONE playAudio event (Plivo buffers and plays it).
+      const msg = JSON.stringify({
+        event: "playAudio",
+        media: {
+          contentType: "audio/x-mulaw",
+          sampleRate: 8000,
+          payload: mulaw.toString("base64"),
+        },
+      });
+      ws.send(msg);
+
+      // Estimate playback duration to release isSpeaking (mulaw 8kHz = 8000 bytes/sec)
+      const durationMs = Math.ceil((mulaw.length / 8000) * 1000);
+      setTimeout(() => { isSpeaking = false; }, durationMs + 300);
+
+      logger.info({ bytes: mulaw.length, durationMs, callUuid }, "Sent playAudio");
+    } catch (err) {
+      logger.error({ err: err.message }, "speak() failed");
+      isSpeaking = false;
+    }
+  }
+
+  /** Interrupt current AI audio (barge-in). */
+  function clearPlayback() {
+    if (ws.readyState === 1 && streamId) {
+      ws.send(JSON.stringify({ event: "clearAudio", streamId }));
+    }
+    isSpeaking = false;
+    logger.debug("Barge-in — cleared audio");
   }
 
   function cleanup() {
@@ -115,67 +158,9 @@ export function handleVoiceStream(ws) {
   }
 }
 
-async function sendGreeting(ws, streamSid) {
-  try {
-    logger.info({ streamSid, wsReady: ws.readyState }, "Generating greeting TTS...");
-    const greeting = "Namaste! Main Codeskate ki taraf se bol rahi hoon. Aapki kaise madad kar sakti hoon?";
-    const audio = await synthesizeSpeech(greeting);
-
-    if (!audio) {
-      logger.error("Greeting TTS returned null!");
-      return;
-    }
-
-    logger.info({ audioSize: audio.length, streamSid, wsReady: ws.readyState }, "Greeting audio generated, sending to Plivo...");
-
-    if (ws.readyState === 1) {
-      sendAudioToPlivo(ws, streamSid, audio);
-      logger.info({ chunksSent: Math.ceil(audio.length / 160) }, "Greeting audio sent to Plivo");
-    } else {
-      logger.error({ wsReady: ws.readyState }, "WebSocket not open, cannot send greeting");
-    }
-  } catch (err) {
-    logger.error({ err: err.message, stack: err.stack?.slice(0, 200) }, "Greeting failed");
-  }
-}
-
-async function streamTTSToPlivo(ws, streamSid, text) {
-  try {
-    const audio = await synthesizeSpeech(text);
-    if (!audio) {
-      logger.error("TTS returned null for response");
-      return;
-    }
-    if (ws.readyState === 1) {
-      sendAudioToPlivo(ws, streamSid, audio);
-      logger.info({ audioSize: audio.length, chunksSent: Math.ceil(audio.length / 160) }, "Response audio sent");
-    }
-  } catch (err) {
-    logger.error({ err: err.message }, "streamTTSToPlivo failed");
-  }
-}
-
-function sendAudioToPlivo(ws, streamSid, audio) {
-  const chunkSize = 160; // 20ms at 8kHz mulaw
-  let sent = 0;
-  for (let i = 0; i < audio.length; i += chunkSize) {
-    const chunk = audio.slice(i, i + chunkSize);
-    const msg = JSON.stringify({
-      event: "playAudio",
-      media: {
-        contentType: "audio/x-mulaw;rate=8000",
-        sampleRate: 8000,
-        payload: chunk.toString("base64"),
-      },
-    });
-    ws.send(msg);
-    sent++;
-  }
-  logger.debug({ sent, streamSid }, "Audio chunks sent to Plivo");
-}
-
+/** Energy-based voice activity detection on mulaw audio. */
 function hasSignificantAudio(chunk) {
   let energy = 0;
   for (let i = 0; i < chunk.length; i++) energy += Math.abs(chunk[i] - 0x7F);
-  return (energy / chunk.length) > 10;
+  return chunk.length > 0 && (energy / chunk.length) > 15;
 }

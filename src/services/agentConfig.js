@@ -93,8 +93,9 @@ export function getAgentConfig(orgId = null) {
 
   return {
     systemPrompt,
+    greeting: "Hello! Codeskate se Priya bol rahi hoon. Boliye, kaise help kar sakti hoon aapki?",
     language: "hi-IN",
-    voice: "alloy",
+    voice: "nova",
     fillerEnabled: true,
     maxTurnLength: 200,
     escalationKeywords: ["human", "agent", "real person", "insaan", "manager"],

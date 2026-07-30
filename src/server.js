@@ -1,35 +1,48 @@
 /**
- * Codeskate Voice AI — HTTP mode (PROVEN WORKING).
+ * Codeskate Voice AI — WebSocket real-time mode.
  *
- * This mode works reliably on Plivo India trial.
- * Greeting: Polly (instant). Responses: OpenAI TTS (natural).
+ * Plivo <Stream> streams call audio bidirectionally over WebSocket.
+ * Pipeline: audio in -> STT -> GPT -> TTS -> audio out (real-time, low latency).
+ *
+ * Uses the exact Plivo Audio Streaming protocol:
+ *   IN:  start (streamId, callId, mediaFormat), media (payload), stop
+ *   OUT: playAudio (contentType, sampleRate, payload), clearAudio
  */
 
 import express from "express";
+import { createServer } from "http";
+import { WebSocketServer } from "ws";
 import { config } from "./config/env.js";
 import { logger } from "./config/logger.js";
 import { plivoRoutes } from "./routes/plivo.js";
 import { callLogRoutes } from "./routes/callLogs.js";
-import { getAudioById } from "./pipeline/tts.js";
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.get("/", (req, res) => res.json({ service: "codeskate-voice-ai", status: "running" }));
+app.get("/", (req, res) => res.json({ service: "codeskate-voice-ai", status: "running", mode: "websocket" }));
 app.get("/health", (req, res) => res.json({ ok: true, uptime: process.uptime() }));
-
-// Audio endpoint — Plivo <Play> fetches TTS audio from here
-app.get("/audio/:id", (req, res) => {
-  const audio = getAudioById(req.params.id);
-  if (!audio) return res.status(404).send("Not found");
-  res.set("Content-Type", audio.contentType);
-  res.send(audio.buffer);
-});
 
 app.use("/plivo", plivoRoutes);
 app.use("/api", callLogRoutes);
 
-app.listen(config.port, "0.0.0.0", () => {
-  logger.info({ port: config.port, host: "0.0.0.0", webhookUrl: `${config.publicBaseUrl}/plivo/inbound` }, "Codeskate Voice AI started");
+const server = createServer(app);
+const wss = new WebSocketServer({ server, path: "/voice-stream" });
+
+wss.on("connection", async (ws, req) => {
+  logger.info({ url: req.url }, "Voice stream WebSocket connected!");
+  // Lazy import to keep startup fast
+  const { handleVoiceStream } = await import("./pipeline/voiceStreamHandler.js");
+  handleVoiceStream(ws);
+});
+
+wss.on("error", (err) => logger.error({ err: err.message }, "WebSocket server error"));
+
+server.listen(config.port, "0.0.0.0", () => {
+  logger.info({
+    port: config.port,
+    mode: "WebSocket real-time",
+    wsUrl: `${config.publicBaseUrl.replace("https://", "wss://")}/voice-stream`,
+  }, "Codeskate Voice AI started");
 });

@@ -65,43 +65,61 @@ export async function transcribeFromUrl(recordingUrl) {
 }
 
 /**
- * Transcribe raw mulaw audio buffer (for WebSocket mode — future use).
+ * Transcribe raw audio buffer from Plivo WebSocket (real-time mode).
+ * Handles the media format Plivo declares in the start event.
+ *
+ * @param {Buffer} rawBuffer - raw audio bytes from Plivo media events
+ * @param {{encoding: string, sampleRate: number}} mediaFormat
  */
-export async function transcribeAudio(mulawBuffer) {
+export async function transcribeAudio(rawBuffer, mediaFormat = {}) {
   try {
-    const wavBuffer = wrapMulawInWav(mulawBuffer, 8000);
+    const encoding = (mediaFormat.encoding || "audio/x-mulaw").toLowerCase();
+    const sampleRate = mediaFormat.sampleRate || 8000;
+
+    // Build a WAV wrapper matching Plivo's encoding
+    let wavBuffer;
+    if (encoding.includes("mulaw") || encoding.includes("ulaw")) {
+      wavBuffer = wrapWav(rawBuffer, sampleRate, 7, 8); // format 7 = mu-law, 8-bit
+    } else {
+      // Assume L16 PCM (audio/x-l16)
+      wavBuffer = wrapWav(rawBuffer, sampleRate, 1, 16); // format 1 = PCM, 16-bit
+    }
+
     const file = new File([wavBuffer], "audio.wav", { type: "audio/wav" });
 
     const response = await openai.audio.transcriptions.create({
       model: "whisper-1",
       file,
-      language: config.agent.language.split("-")[0],
+      language: "en", // Hinglish -> romanized (better than garbled Devanagari)
       response_format: "text",
+      prompt: "Phone call in Hinglish. Words: Codeskate, plan, pricing, subscription, growth, starter, WhatsApp, CRM, lead, demo, kitna, chahiye, batao, haan, nahi.",
     });
 
     return (typeof response === "string" ? response : response?.text || "").trim() || null;
   } catch (err) {
-    logger.error({ err: err.message }, "Whisper STT failed");
+    logger.error({ err: err.message }, "Whisper STT (stream) failed");
     return null;
   }
 }
 
-function wrapMulawInWav(rawBuffer, sampleRate) {
+/**
+ * Wrap raw audio in a WAV container.
+ * @param audioFormat 7 = mu-law, 1 = PCM
+ * @param bitsPerSample 8 for mulaw, 16 for PCM
+ */
+function wrapWav(rawBuffer, sampleRate, audioFormat, bitsPerSample) {
   const numChannels = 1;
-  const bitsPerSample = 8;
   const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
   const blockAlign = numChannels * (bitsPerSample / 8);
   const dataSize = rawBuffer.length;
-  const headerSize = 44;
-  const fileSize = headerSize + dataSize - 8;
+  const header = Buffer.alloc(44);
 
-  const header = Buffer.alloc(headerSize);
   header.write("RIFF", 0);
-  header.writeUInt32LE(fileSize, 4);
+  header.writeUInt32LE(36 + dataSize, 4);
   header.write("WAVE", 8);
   header.write("fmt ", 12);
   header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(7, 20);
+  header.writeUInt16LE(audioFormat, 20);
   header.writeUInt16LE(numChannels, 22);
   header.writeUInt32LE(sampleRate, 24);
   header.writeUInt32LE(byteRate, 28);
