@@ -119,22 +119,31 @@ export function handleVoiceStream(ws) {
       if (!pcm || ws.readyState !== 1) return;
 
       isSpeaking = true;
-      // Send as ONE playAudio event. Format MUST match Plivo stream: audio/x-l16 @ 8kHz.
-      const msg = JSON.stringify({
-        event: "playAudio",
-        media: {
-          contentType: "audio/x-l16",
-          sampleRate: 8000,
-          payload: pcm.toString("base64"),
-        },
-      });
-      ws.send(msg);
+
+      // Plivo limit: max WebSocket message 64KB, recommended <=16KB base64.
+      // Chunk raw PCM into ~6400-byte pieces (base64 ~8.5KB, well under limit).
+      // Plivo buffers chunks (playback queue ~60s) and plays them in order.
+      const CHUNK = 6400; // 0.4s of L16 8kHz audio per chunk
+      let chunksSent = 0;
+      for (let i = 0; i < pcm.length; i += CHUNK) {
+        if (ws.readyState !== 1) break;
+        const slice = pcm.slice(i, i + CHUNK);
+        ws.send(JSON.stringify({
+          event: "playAudio",
+          media: {
+            contentType: "audio/x-l16",
+            sampleRate: 8000,
+            payload: slice.toString("base64"),
+          },
+        }));
+        chunksSent++;
+      }
 
       // L16 8kHz = 16000 bytes/sec. Estimate playback duration to release isSpeaking.
       const durationMs = Math.ceil((pcm.length / 16000) * 1000);
       setTimeout(() => { isSpeaking = false; }, durationMs + 300);
 
-      logger.info({ bytes: pcm.length, durationMs, callUuid }, "Sent playAudio (L16)");
+      logger.info({ bytes: pcm.length, chunksSent, durationMs, callUuid }, "Sent playAudio (L16, chunked)");
     } catch (err) {
       logger.error({ err: err.message }, "speak() failed");
       isSpeaking = false;
