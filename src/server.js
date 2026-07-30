@@ -42,9 +42,10 @@ wss.on("connection", (ws, req) => {
   handleVoiceStream(ws);
 });
 
-server.listen(config.port, () => {
+server.listen(config.port, "0.0.0.0", () => {
   logger.info({
     port: config.port,
+    host: "0.0.0.0",
     mode: "WebSocket real-time",
     webhookUrl: `${config.publicBaseUrl}/plivo/inbound`,
     wsUrl: `${config.publicBaseUrl.replace("https://", "wss://")}/voice-stream`,
