@@ -49,31 +49,20 @@ plivoRoutes.post("/inbound", async (req, res) => {
     startedAt: new Date().toISOString(),
   });
 
-  try {
-    // Generate greeting audio with OpenAI TTS (natural voice)
-    const greetingId = await synthesizeSpeechToFile("Namaste! Main Codeskate ki taraf se bol rahi hoon. Aapki kaise madad kar sakti hoon?");
-
-    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+  // Respond INSTANTLY with Polly greeting (no TTS generation delay).
+  // This keeps Plivo's answer webhook fast so the call connects reliably.
+  // The actual AI conversation uses natural OpenAI TTS (in /handle-speech).
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Play>${config.publicBaseUrl}/audio/${greetingId}</Play>
+  <Speak voice="Polly.Aditi" language="hi-IN">Namaste! Codeskate mein aapka swagat hai. Boliye, main aapki kaise madad karoon?</Speak>
   <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${CallUUID}" method="POST" maxLength="30" timeout="3" finishOnKey="#" recordSession="false" redirect="true" />
-  <Play>${config.publicBaseUrl}/audio/${greetingId}</Play>
+  <Speak voice="Polly.Aditi" language="hi-IN">Kya aap kuch kehna chahte hain?</Speak>
+  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${CallUUID}" method="POST" maxLength="30" timeout="5" finishOnKey="#" recordSession="false" redirect="true" />
 </Response>`;
 
-    res.set("Content-Type", "application/xml");
-    res.send(xml);
-    logger.info({ callUuid: CallUUID, greetingId }, "Sent greeting XML");
-  } catch (err) {
-    logger.error({ err: err.message, callUuid: CallUUID }, "Inbound handler error");
-    // Fallback to Polly if TTS fails
-    const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Speak voice="Polly.Aditi" language="hi-IN">Namaste, main aapki kaise madad kar sakti hoon?</Speak>
-  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${CallUUID}" method="POST" maxLength="30" timeout="3" finishOnKey="#" recordSession="false" redirect="true" />
-</Response>`;
-    res.set("Content-Type", "application/xml");
-    res.send(xml);
-  }
+  res.set("Content-Type", "application/xml");
+  res.send(xml);
+  logger.info({ callUuid: CallUUID }, "Sent greeting XML (fast Polly)");
 });
 
 /**
