@@ -1,5 +1,9 @@
 /**
  * Speech-to-Text (STT) — OpenAI Whisper API.
+ *
+ * Two modes:
+ * 1. transcribeFromUrl(url) — Download audio from Plivo recording URL, send to Whisper
+ * 2. transcribeAudio(buffer) — Direct buffer transcription (for future WebSocket use)
  */
 
 import OpenAI from "openai";
@@ -8,6 +12,57 @@ import { logger } from "../config/logger.js";
 
 const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
+/**
+ * Download audio from a URL (Plivo recording) and transcribe with Whisper.
+ *
+ * @param {string} recordingUrl - URL to the audio file (Plivo provides this)
+ * @returns {string|null} Transcribed text or null
+ */
+export async function transcribeFromUrl(recordingUrl) {
+  try {
+    if (!recordingUrl) return null;
+
+    // Plivo recording URLs need auth to download
+    const authHeader = Buffer.from(`${config.plivo.authId}:${config.plivo.authToken}`).toString("base64");
+
+    // Download the recording
+    const audioResponse = await fetch(recordingUrl, {
+      headers: { Authorization: `Basic ${authHeader}` },
+    });
+
+    if (!audioResponse.ok) {
+      logger.warn({ status: audioResponse.status, url: recordingUrl }, "Failed to download recording");
+      return null;
+    }
+
+    const audioBuffer = Buffer.from(await audioResponse.arrayBuffer());
+
+    if (audioBuffer.length < 1000) {
+      logger.debug("Recording too short, skipping transcription");
+      return null;
+    }
+
+    // Send to Whisper
+    const file = new File([audioBuffer], "recording.wav", { type: "audio/wav" });
+
+    const response = await openai.audio.transcriptions.create({
+      model: "whisper-1",
+      file,
+      language: config.agent.language.split("-")[0], // "hi" from "hi-IN"
+      response_format: "text",
+    });
+
+    const text = typeof response === "string" ? response.trim() : response?.text?.trim() || "";
+    return text || null;
+  } catch (err) {
+    logger.error({ err: err.message, url: recordingUrl }, "Whisper STT failed");
+    return null;
+  }
+}
+
+/**
+ * Transcribe raw mulaw audio buffer (for WebSocket mode — future use).
+ */
 export async function transcribeAudio(mulawBuffer) {
   try {
     const wavBuffer = wrapMulawInWav(mulawBuffer, 8000);
@@ -20,7 +75,7 @@ export async function transcribeAudio(mulawBuffer) {
       response_format: "text",
     });
 
-    return response?.trim() || null;
+    return (typeof response === "string" ? response : response?.text || "").trim() || null;
   } catch (err) {
     logger.error({ err: err.message }, "Whisper STT failed");
     return null;
