@@ -1,41 +1,22 @@
 /**
- * Plivo Webhook Routes — HTTP-only approach (No WebSocket).
+ * Plivo Webhook Routes — WebSocket streaming mode.
  *
- * Flow:
- *   1. /inbound — Call arrives, greet + start recording user speech
- *   2. /handle-speech — Recording done, transcribe + GPT + respond + record again
- *   3. /status — Call ended
+ * Inbound call → Plivo streams audio bidirectionally via WebSocket →
+ * Our server processes in real-time (STT → LLM → TTS) → audio back to caller.
  *
- * This approach works on ANY hosting (including Render free tier)
- * because it uses only HTTP POST webhooks, no WebSocket required.
+ * Voice: OpenAI TTS (human-like, not Polly)
+ * Latency: ~1-1.5 sec (real-time streaming)
  */
 
 import { Router } from "express";
 import { config } from "../config/env.js";
 import { logger } from "../config/logger.js";
-import { createCallLog, updateCallLog, appendTranscript } from "../services/callLogger.js";
-import { transcribeFromUrl } from "../pipeline/stt.js";
-import { generateResponse } from "../pipeline/llm.js";
-import { getAgentConfig } from "../services/agentConfig.js";
+import { createCallLog, updateCallLog } from "../services/callLogger.js";
 
 export const plivoRoutes = Router();
 
-// In-memory conversation state per call (cleared on hangup)
-const callStates = new Map();
-
-function getCallState(callUuid) {
-  if (!callStates.has(callUuid)) {
-    const agentConfig = getAgentConfig();
-    callStates.set(callUuid, {
-      messages: [{ role: "system", content: agentConfig.systemPrompt }],
-      turnCount: 0,
-    });
-  }
-  return callStates.get(callUuid);
-}
-
 /**
- * Inbound call — greet the customer and start listening.
+ * Inbound call — start bidirectional audio stream.
  */
 plivoRoutes.post("/inbound", (req, res) => {
   const { CallUUID, From, To, Direction, CallStatus } = req.body;
@@ -50,13 +31,11 @@ plivoRoutes.post("/inbound", (req, res) => {
     startedAt: new Date().toISOString(),
   });
 
-  // Greet + Record user's speech
+  const wsUrl = config.publicBaseUrl.replace("https://", "wss://").replace("http://", "ws://") + "/voice-stream";
+
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Speak voice="Polly.Aditi" language="hi-IN">Namaste, main aapki kaise madad kar sakti hoon?</Speak>
-  <Record action="${config.publicBaseUrl}/plivo/handle-speech" method="POST" maxLength="30" timeout="3" finishOnKey="#" recordSession="false" redirect="true" />
-  <Speak voice="Polly.Aditi" language="hi-IN">Maaf kijiye, aapki awaaz nahi aa rahi. Kripya dobara bolein.</Speak>
-  <Record action="${config.publicBaseUrl}/plivo/handle-speech" method="POST" maxLength="30" timeout="5" finishOnKey="#" recordSession="false" redirect="true" />
+  <Stream bidirectional="true" keepCallAlive="true" streamTimeout="3600" contentType="audio/x-mulaw;rate=8000" audioTrack="both" statusCallbackUrl="${config.publicBaseUrl}/plivo/stream-status">${wsUrl}?callUuid=${CallUUID}&amp;from=${encodeURIComponent(From)}&amp;to=${encodeURIComponent(To)}</Stream>
 </Response>`;
 
   res.set("Content-Type", "application/xml");
@@ -64,89 +43,11 @@ plivoRoutes.post("/inbound", (req, res) => {
 });
 
 /**
- * Handle recorded speech — transcribe, get AI response, speak it, record again.
+ * Stream status callback.
  */
-plivoRoutes.post("/handle-speech", async (req, res) => {
-  const { CallUUID, RecordUrl, RecordingDuration } = req.body;
-  logger.info({ callUuid: CallUUID, recordUrl: RecordUrl, duration: RecordingDuration }, "Speech recorded");
-
-  try {
-    const state = getCallState(CallUUID);
-    state.turnCount++;
-
-    // Skip if recording too short (likely silence/noise)
-    if (!RecordUrl || Number(RecordingDuration) < 1) {
-      const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Speak voice="Polly.Aditi" language="hi-IN">Kya aap kuch bolna chahte hain? Main sun rahi hoon.</Speak>
-  <Record action="${config.publicBaseUrl}/plivo/handle-speech" method="POST" maxLength="30" timeout="5" finishOnKey="#" recordSession="false" redirect="true" />
-</Response>`;
-      res.set("Content-Type", "application/xml");
-      return res.send(xml);
-    }
-
-    // 1. Transcribe the recording (download from Plivo URL → Whisper)
-    const userText = await transcribeFromUrl(RecordUrl);
-
-    if (!userText || userText.trim().length === 0) {
-      const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Speak voice="Polly.Aditi" language="hi-IN">Maaf kijiye, main samajh nahi paayi. Kya aap dobara bol sakte hain?</Speak>
-  <Record action="${config.publicBaseUrl}/plivo/handle-speech" method="POST" maxLength="30" timeout="5" finishOnKey="#" recordSession="false" redirect="true" />
-</Response>`;
-      res.set("Content-Type", "application/xml");
-      return res.send(xml);
-    }
-
-    logger.info({ userText, callUuid: CallUUID, turn: state.turnCount }, "User said");
-    appendTranscript(CallUUID, "user", userText);
-
-    // 2. Check for goodbye/end indicators
-    const goodbyeWords = ["bye", "thank", "ok bye", "dhanyavaad", "theek hai", "bas", "alvida"];
-    const isGoodbye = goodbyeWords.some((w) => userText.toLowerCase().includes(w));
-
-    // 3. Generate AI response
-    state.messages.push({ role: "user", content: userText });
-    const aiResponse = await generateResponse(state.messages);
-    state.messages.push({ role: "assistant", content: aiResponse });
-
-    logger.info({ aiResponse: aiResponse.slice(0, 100), callUuid: CallUUID }, "AI response");
-    appendTranscript(CallUUID, "assistant", aiResponse);
-
-    // 4. Speak response + record next turn (or end if goodbye)
-    let xml;
-    if (isGoodbye || state.turnCount >= 20) {
-      // End the call gracefully
-      xml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Speak voice="Polly.Aditi" language="hi-IN">${escapeXml(aiResponse)} Dhanyavaad, aapka din shubh ho!</Speak>
-  <Hangup />
-</Response>`;
-      // Cleanup state
-      callStates.delete(CallUUID);
-    } else {
-      // Continue conversation
-      xml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Speak voice="Polly.Aditi" language="hi-IN">${escapeXml(aiResponse)}</Speak>
-  <Record action="${config.publicBaseUrl}/plivo/handle-speech" method="POST" maxLength="30" timeout="4" finishOnKey="#" recordSession="false" redirect="true" />
-  <Speak voice="Polly.Aditi" language="hi-IN">Aur kuch madad chahiye?</Speak>
-  <Record action="${config.publicBaseUrl}/plivo/handle-speech" method="POST" maxLength="30" timeout="5" finishOnKey="#" recordSession="false" redirect="true" />
-</Response>`;
-    }
-
-    res.set("Content-Type", "application/xml");
-    res.send(xml);
-  } catch (err) {
-    logger.error({ err: err.message, callUuid: CallUUID }, "Handle speech error");
-    const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Speak voice="Polly.Aditi" language="hi-IN">Ek technical samasya aa gayi hai. Kripya thodi der baad dubara try karein.</Speak>
-  <Hangup />
-</Response>`;
-    res.set("Content-Type", "application/xml");
-    res.send(xml);
-  }
+plivoRoutes.post("/stream-status", (req, res) => {
+  logger.info({ body: req.body }, "Stream status callback");
+  res.sendStatus(200);
 });
 
 /**
@@ -156,8 +57,6 @@ plivoRoutes.post("/status", (req, res) => {
   const { CallUUID, CallStatus, Duration, EndTime, HangupCause } = req.body;
   logger.info({ callUuid: CallUUID, status: CallStatus, duration: Duration, hangupCause: HangupCause }, "Call status update");
   updateCallLog(CallUUID, { status: CallStatus, duration: Number(Duration) || 0, endedAt: EndTime || new Date().toISOString(), hangupCause: HangupCause || null });
-  // Cleanup conversation state
-  callStates.delete(CallUUID);
   res.sendStatus(200);
 });
 
@@ -165,7 +64,7 @@ plivoRoutes.post("/status", (req, res) => {
  * Outbound call initiation.
  */
 plivoRoutes.post("/outbound", async (req, res) => {
-  const { to, agentPrompt } = req.body;
+  const { to } = req.body;
   if (!to) return res.status(400).json({ error: "Missing 'to' phone number" });
   if (!config.plivo.authId) return res.status(500).json({ error: "Plivo not configured" });
 
@@ -178,7 +77,7 @@ plivoRoutes.post("/outbound", async (req, res) => {
       body: JSON.stringify({
         from: config.plivo.phoneNumber,
         to,
-        answer_url: `${config.publicBaseUrl}/plivo/inbound`,
+        answer_url: `${config.publicBaseUrl}/plivo/outbound-answer`,
         answer_method: "POST",
         hangup_url: `${config.publicBaseUrl}/plivo/status`,
         hangup_method: "POST",
@@ -196,13 +95,17 @@ plivoRoutes.post("/outbound", async (req, res) => {
 });
 
 /**
- * Escape special XML characters in AI response text.
+ * Outbound call answer — customer picked up.
  */
-function escapeXml(text) {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
+plivoRoutes.post("/outbound-answer", (req, res) => {
+  const { CallUUID, From, To } = req.body;
+  const wsUrl = config.publicBaseUrl.replace("https://", "wss://").replace("http://", "ws://") + "/voice-stream";
+
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Stream bidirectional="true" keepCallAlive="true" streamTimeout="3600" contentType="audio/x-mulaw;rate=8000" audioTrack="both">${wsUrl}?callUuid=${CallUUID}&amp;from=${encodeURIComponent(From)}&amp;to=${encodeURIComponent(To)}&amp;direction=outbound</Stream>
+</Response>`;
+
+  res.set("Content-Type", "application/xml");
+  res.send(xml);
+});
