@@ -54,9 +54,9 @@ plivoRoutes.post("/inbound", async (req, res) => {
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Speak voice="Polly.Kajal" language="hi-IN">Namaste! Codeskate mein aapka swaagat hai. Boliye, main aapki kaise madad karoon?</Speak>
-  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${CallUUID}" method="POST" maxLength="30" timeout="3" finishOnKey="#" recordSession="false" redirect="true" />
+  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${CallUUID}" method="POST" maxLength="30" timeout="2" finishOnKey="#" recordSession="false" redirect="true" />
   <Speak voice="Polly.Kajal" language="hi-IN">Kya aap kuch kehna chahte hain?</Speak>
-  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${CallUUID}" method="POST" maxLength="30" timeout="5" finishOnKey="#" recordSession="false" redirect="true" />
+  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${CallUUID}" method="POST" maxLength="30" timeout="2" finishOnKey="#" recordSession="false" redirect="true" />
 </Response>`;
 
   res.set("Content-Type", "application/xml");
@@ -82,7 +82,7 @@ plivoRoutes.post("/handle-speech", async (req, res) => {
       const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Play>${config.publicBaseUrl}/audio/${promptId}</Play>
-  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${callUuid}" method="POST" maxLength="30" timeout="5" finishOnKey="#" recordSession="false" redirect="true" />
+  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${callUuid}" method="POST" maxLength="30" timeout="2" finishOnKey="#" recordSession="false" redirect="true" />
 </Response>`;
       res.set("Content-Type", "application/xml");
       return res.send(xml);
@@ -95,7 +95,7 @@ plivoRoutes.post("/handle-speech", async (req, res) => {
       const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Play>${config.publicBaseUrl}/audio/${retryId}</Play>
-  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${callUuid}" method="POST" maxLength="30" timeout="5" finishOnKey="#" recordSession="false" redirect="true" />
+  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${callUuid}" method="POST" maxLength="30" timeout="2" finishOnKey="#" recordSession="false" redirect="true" />
 </Response>`;
       res.set("Content-Type", "application/xml");
       return res.send(xml);
@@ -134,7 +134,7 @@ plivoRoutes.post("/handle-speech", async (req, res) => {
       xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Play>${config.publicBaseUrl}/audio/${responseId}</Play>
-  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${callUuid}" method="POST" maxLength="30" timeout="4" finishOnKey="#" recordSession="false" redirect="true" />
+  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${callUuid}" method="POST" maxLength="30" timeout="2" finishOnKey="#" recordSession="false" redirect="true" />
 </Response>`;
     }
 

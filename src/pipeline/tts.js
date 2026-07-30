@@ -33,7 +33,7 @@ export async function synthesizeSpeechToFile(text) {
       voice: config.agent.voice, // "alloy" — natural human voice
       input: text,
       response_format: "mp3", // Plivo supports mp3 via <Play>
-      speed: 1.0,
+      speed: 1.1, // Slightly faster — feels more responsive on phone
     });
 
     const arrayBuffer = await response.arrayBuffer();
