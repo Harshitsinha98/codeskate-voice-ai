@@ -15,16 +15,24 @@ plivoRoutes.post("/inbound", (req, res) => {
 
   createCallLog({ callUuid: CallUUID, from: From, to: To, direction: Direction || "inbound", status: CallStatus || "ringing", startedAt: new Date().toISOString() });
 
-  const wsUrl = `${config.publicBaseUrl.replace("http", "ws")}/voice-stream`;
+  // Use wss:// for the WebSocket URL
+  const wsUrl = config.publicBaseUrl.replace("https://", "wss://").replace("http://", "ws://") + "/voice-stream";
+
+  // No <Speak> before <Stream> — greeting will come from AI via TTS through the stream.
+  // Plivo docs: when keepCallAlive=true, subsequent XML elements are not executed.
+  // streamTimeout=3600 keeps the call alive for up to 1 hour.
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Speak voice="Polly.Aditi" language="hi-IN">Namaste, mai aapki kaise madad kar sakti hoon?</Speak>
-  <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000" audioTrack="both">
-    ${wsUrl}?callUuid=${CallUUID}&amp;from=${encodeURIComponent(From)}&amp;to=${encodeURIComponent(To)}
-  </Stream>
+  <Stream bidirectional="true" keepCallAlive="true" streamTimeout="3600" contentType="audio/x-mulaw;rate=8000" audioTrack="both" statusCallbackUrl="${config.publicBaseUrl}/plivo/stream-status">${wsUrl}?callUuid=${CallUUID}&amp;from=${encodeURIComponent(From)}&amp;to=${encodeURIComponent(To)}</Stream>
 </Response>`;
   res.set("Content-Type", "application/xml");
   res.send(xml);
+});
+
+// Stream status callback — helps debug stream connection issues
+plivoRoutes.post("/stream-status", (req, res) => {
+  logger.info({ body: req.body }, "Stream status callback");
+  res.sendStatus(200);
 });
 
 plivoRoutes.post("/status", (req, res) => {
@@ -59,12 +67,10 @@ plivoRoutes.post("/outbound", async (req, res) => {
 
 plivoRoutes.post("/outbound-answer", (req, res) => {
   const { CallUUID, From, To } = req.body;
-  const wsUrl = `${config.publicBaseUrl.replace("http", "ws")}/voice-stream`;
+  const wsUrl = config.publicBaseUrl.replace("https://", "wss://").replace("http://", "ws://") + "/voice-stream";
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000" audioTrack="both">
-    ${wsUrl}?callUuid=${CallUUID}&amp;from=${encodeURIComponent(From)}&amp;to=${encodeURIComponent(To)}&amp;direction=outbound
-  </Stream>
+  <Stream bidirectional="true" keepCallAlive="true" streamTimeout="3600" contentType="audio/x-mulaw;rate=8000" audioTrack="both">${wsUrl}?callUuid=${CallUUID}&amp;from=${encodeURIComponent(From)}&amp;to=${encodeURIComponent(To)}&amp;direction=outbound</Stream>
 </Response>`;
   res.set("Content-Type", "application/xml");
   res.send(xml);

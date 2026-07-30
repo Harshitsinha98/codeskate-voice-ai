@@ -33,6 +33,8 @@ export function handleVoiceStream(ws) {
           streamSid = msg.start?.streamSid || msg.streamSid;
           callUuid = msg.start?.callId || msg.start?.customParameters?.callUuid;
           logger.info({ streamSid, callUuid }, "Audio stream started");
+          // Send greeting via TTS as soon as stream connects
+          sendGreeting(ws, streamSid);
           break;
 
         case "media":
@@ -114,6 +116,16 @@ async function sendFiller(ws, streamSid) {
     const audio = await synthesizeSpeech(filler);
     if (audio && ws.readyState === 1) sendAudioToPlivo(ws, streamSid, audio);
   } catch (err) { /* non-fatal */ }
+}
+
+async function sendGreeting(ws, streamSid) {
+  try {
+    const greeting = "Namaste, main aapki kaise madad kar sakti hoon?";
+    const audio = await synthesizeSpeech(greeting);
+    if (audio && ws.readyState === 1) sendAudioToPlivo(ws, streamSid, audio);
+  } catch (err) {
+    logger.warn({ err: err.message }, "Greeting TTS failed");
+  }
 }
 
 async function streamTTSToPlivo(ws, streamSid, text) {
