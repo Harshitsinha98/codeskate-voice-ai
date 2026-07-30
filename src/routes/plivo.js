@@ -34,7 +34,7 @@ plivoRoutes.post("/inbound", (req, res) => {
 
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Speak voice="Polly.Kajal" language="hi-IN">Namaste! Codeskate mein aapka swaagat hai. Boliye, main aapki kaise madad karoon?</Speak>
+  <Speak voice="Polly.Kajal" language="hi-IN">Hello, Codeskate se Priya bol rahi hoon. Boliye, kaise help kar sakti hoon?</Speak>
   <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${CallUUID}" method="POST" maxLength="30" timeout="2" finishOnKey="#" playBeep="false" recordSession="false" redirect="true" />
   <Speak voice="Polly.Kajal" language="hi-IN">Kya aap kuch kehna chahte hain?</Speak>
   <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${CallUUID}" method="POST" maxLength="30" timeout="3" finishOnKey="#" playBeep="false" recordSession="false" redirect="true" />
