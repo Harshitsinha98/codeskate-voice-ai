@@ -62,12 +62,15 @@ plivoRoutes.post("/handle-speech", async (req, res) => {
       return res.send(xml);
     }
 
-    const userText = await transcribeFromUrl(RecordUrl);
-    if (!userText || userText.trim().length === 0) {
+    const rawText = await transcribeFromUrl(RecordUrl);
+    const userText = cleanTranscript(rawText);
+
+    // If empty OR a known Whisper hallucination (from silence/noise), ask again
+    if (!userText || userText.trim().length === 0 || isHallucination(rawText)) {
+      logger.info({ rawText, callUuid }, "Empty/hallucination — re-listening");
       const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Speak voice="Polly.Kajal" language="hi-IN">Maaf kijiye, thik se sunai nahi diya. Dobara boliye.</Speak>
-  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${callUuid}" method="POST" maxLength="30" timeout="3" finishOnKey="#" playBeep="false" recordSession="false" redirect="true" />
+  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${callUuid}" method="POST" maxLength="30" timeout="4" finishOnKey="#" playBeep="false" recordSession="false" redirect="true" />
 </Response>`;
       res.set("Content-Type", "application/xml");
       return res.send(xml);
@@ -146,3 +149,45 @@ plivoRoutes.post("/outbound", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+
+
+/**
+ * Whisper hallucinates these phrases on silence/noise. Reject them.
+ */
+function isHallucination(text) {
+  if (!text) return true;
+  const t = text.trim().toLowerCase();
+
+  // Common Whisper hallucinations on silent/noisy audio
+  const hallucinations = [
+    "thank you", "thank you.", "thanks for watching", "bye", "hello",
+    "shabbat shalom", ".", "you", "so", "okay", "ok",
+  ];
+  if (hallucinations.includes(t)) return true;
+
+  // Repeated single word: "hello hello hello", "thank you thank you"
+  const words = t.replace(/[.,!?]/g, "").split(/\s+/).filter(Boolean);
+  if (words.length >= 3) {
+    const unique = new Set(words);
+    if (unique.size <= 2) return true; // Mostly repeated words = hallucination
+  }
+
+  // Too short to be meaningful (single char or two)
+  if (t.replace(/[.,!?\s]/g, "").length < 2) return true;
+
+  return false;
+}
+
+/**
+ * Clean up transcript — remove excessive repetition and trim.
+ */
+function cleanTranscript(text) {
+  if (!text) return "";
+  let t = text.trim();
+
+  // Collapse repeated words ("hello hello hello" -> "hello")
+  t = t.replace(/\b(\w+)(\s+\1\b)+/gi, "$1");
+
+  return t.trim();
+}

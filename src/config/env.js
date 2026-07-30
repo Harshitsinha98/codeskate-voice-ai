@@ -23,7 +23,7 @@ export const config = {
   // AI Agent
   agent: {
     language: process.env.AI_AGENT_LANGUAGE || "hi-IN",
-    voice: process.env.AI_AGENT_VOICE || "alloy",
+    voice: process.env.AI_AGENT_VOICE || "nova",
     fillerEnabled: process.env.AI_FILLER_ENABLED !== "false",
   },
 

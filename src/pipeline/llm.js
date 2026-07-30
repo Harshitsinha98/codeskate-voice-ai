@@ -11,10 +11,10 @@ const openai = new OpenAI({ apiKey: config.openai.apiKey });
 export async function generateResponse(messages) {
   try {
     const response = await openai.chat.completions.create({
-      model: "gpt-4.1-nano",
+      model: "gpt-4o-mini", // Better Hindi/Hinglish conversation than nano
       messages,
-      temperature: 0.7,
-      max_tokens: 200,
+      temperature: 0.6,
+      max_tokens: 120, // Short responses for natural phone conversation
     });
     return response.choices[0]?.message?.content || "Maaf kijiye, main samajh nahi paaya. Kya aap dobara bol sakte hain?";
   } catch (err) {

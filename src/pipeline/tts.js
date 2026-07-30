@@ -29,11 +29,11 @@ export async function synthesizeSpeechToFile(text) {
     if (!text || text.trim().length === 0) throw new Error("Empty text");
 
     const response = await openai.audio.speech.create({
-      model: "tts-1",
-      voice: config.agent.voice, // "alloy" — natural human voice
+      model: "gpt-4o-mini-tts", // Newer, more natural/expressive voice
+      voice: config.agent.voice, // "nova" — warm natural female
       input: text,
       response_format: "mp3", // Plivo supports mp3 via <Play>
-      speed: 1.1, // Slightly faster — feels more responsive on phone
+      instructions: "Speak in a warm, friendly, natural Indian customer-care tone. Sound like a real human, conversational and casual. This is Hindi/Hinglish.",
     });
 
     const arrayBuffer = await response.arrayBuffer();
