@@ -8,9 +8,9 @@
  */
 
 import OpenAI from "openai";
-import { v4 as uuid } from "uuid";
 import { config } from "../config/env.js";
 import { logger } from "../config/logger.js";
+import crypto from "crypto";
 
 const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
@@ -40,7 +40,7 @@ export async function synthesizeSpeechToFile(text) {
     const buffer = Buffer.from(arrayBuffer);
 
     // Store with unique ID
-    const id = uuid();
+    const id = crypto.randomUUID();
     audioCache.set(id, { buffer, contentType: "audio/mpeg", createdAt: Date.now() });
 
     // Auto-cleanup old entries
