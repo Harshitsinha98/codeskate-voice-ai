@@ -49,19 +49,19 @@ plivoRoutes.post("/inbound", async (req, res) => {
     startedAt: new Date().toISOString(),
   });
 
-  // Respond INSTANTLY with Polly greeting (no TTS generation delay).
-  // Using Polly.Kajal (newer, more natural Hindi voice) instead of Polly.Aditi
+  // Use wss:// for the WebSocket URL - SIMPLE format as per Plivo docs
+  const wsUrl = config.publicBaseUrl.replace("https://", "wss://").replace("http://", "ws://") + "/voice-stream";
+
+  // Plivo India region: minimal Stream XML (no extra attributes)
+  // Plivo support confirmed this exact format works on free trial.
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Speak voice="Polly.Kajal" language="hi-IN">Namaste! Codeskate mein aapka swaagat hai. Boliye, main aapki kaise madad karoon?</Speak>
-  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${CallUUID}" method="POST" maxLength="30" timeout="2" finishOnKey="#" recordSession="false" redirect="true" />
-  <Speak voice="Polly.Kajal" language="hi-IN">Kya aap kuch kehna chahte hain?</Speak>
-  <Record action="${config.publicBaseUrl}/plivo/handle-speech?callUuid=${CallUUID}" method="POST" maxLength="30" timeout="2" finishOnKey="#" recordSession="false" redirect="true" />
+  <Stream bidirectional="true" keepCallAlive="true">${wsUrl}</Stream>
 </Response>`;
 
   res.set("Content-Type", "application/xml");
   res.send(xml);
-  logger.info({ callUuid: CallUUID }, "Sent greeting XML (fast Polly)");
+  logger.info({ callUuid: CallUUID, wsUrl, xml }, "Sent Stream XML (minimal format)");
 });
 
 /**
