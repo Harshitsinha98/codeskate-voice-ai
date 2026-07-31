@@ -73,10 +73,9 @@ export async function transcribeFromUrl(recordingUrl) {
  */
 export async function transcribeAudio(rawBuffer, mediaFormat = {}) {
   try {
-    const encoding = (mediaFormat.encoding || "audio/x-mulaw").toLowerCase();
     const sampleRate = mediaFormat.sampleRate || 8000;
 
-    // We force mulaw in Stream XML, so always wrap as mulaw WAV
+    // SDK gives raw mulaw audio — wrap as mulaw WAV for Whisper
     const wavBuffer = wrapWav(rawBuffer, sampleRate, 7, 8); // format 7 = mu-law, 8-bit
 
     const file = new File([wavBuffer], "audio.wav", { type: "audio/wav" });

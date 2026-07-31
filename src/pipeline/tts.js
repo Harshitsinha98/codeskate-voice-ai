@@ -84,17 +84,17 @@ export async function synthesizeSpeech(text) {
     if (!text || text.trim().length === 0) return null;
 
     const response = await openai.audio.speech.create({
-      model: "gpt-4o-mini-tts", // Same model as "Priya" — expressive, natural Hindi
+      model: "gpt-4o-mini-tts",
       voice: config.agent.voice, // "nova"
       input: text,
       response_format: "pcm", // Raw PCM 24kHz 16-bit mono
-      instructions: "Speak in a warm, friendly, natural Indian Hindi/Hinglish tone. Sound like a real young Indian woman (Priya), conversational and casual. NOT robotic.",
+      instructions: "Speak in a warm, friendly, natural Indian Hindi/Hinglish tone. Sound like a real young Indian woman named Priya, conversational and casual. NOT robotic.",
     });
 
     const arrayBuffer = await response.arrayBuffer();
     const pcm24k = Buffer.from(arrayBuffer);
 
-    // Plivo stream is mulaw 8kHz → downsample 24kHz→8kHz, then encode mulaw
+    // Convert to mulaw 8kHz for Plivo SDK (playAudio expects mulaw)
     return pcm24kToMulaw8k(pcm24k);
   } catch (err) {
     logger.error({ err: err.message }, "synthesizeSpeech failed");
@@ -104,11 +104,10 @@ export async function synthesizeSpeech(text) {
 
 /**
  * Convert PCM 24kHz 16-bit mono → mulaw 8kHz mono.
- * Plivo recommended: "audio/x-mulaw;rate=8000 — lowest latency, best compatibility"
  */
 function pcm24kToMulaw8k(pcm24k) {
   const sampleCount24k = Math.floor(pcm24k.length / 2);
-  const downsampleFactor = 3; // 24000 / 8000
+  const downsampleFactor = 3;
   const sampleCount8k = Math.floor(sampleCount24k / downsampleFactor);
   const mulaw = Buffer.alloc(sampleCount8k);
 

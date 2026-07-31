@@ -14,6 +14,7 @@
     "openai": "^4.0.0",
     "pino": "^8.0.0",
     "pino-pretty": "^10.0.0",
+    "plivo-stream-sdk-node": "^1.0.0",
     "ws": "^8.0.0"
   }
 }
