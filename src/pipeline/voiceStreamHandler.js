@@ -71,6 +71,12 @@ export function handleVoiceStream(ws) {
         logger.info({ streamId }, "Stream stopped");
         cleanup();
         break;
+
+      case "playedStream":
+        // Plivo confirmed audio finished playing → start listening
+        isSpeaking = false;
+        logger.info({ name: msg.name, callUuid }, "Plivo confirmed playback done");
+        break;
     }
   });
 
@@ -115,9 +121,7 @@ export function handleVoiceStream(ws) {
 
       isSpeaking = true;
 
-      // Plivo limit: max WebSocket message 64KB, recommended <=16KB base64.
-      // Chunk raw PCM into ~6400-byte pieces (base64 ~8.5KB, well under limit).
-      // Plivo buffers chunks (playback queue ~60s) and plays them in order.
+      // Chunk audio (Plivo max 64KB per WS message, recommended <=16KB base64)
       const CHUNK = 6400; // 0.4s of L16 8kHz audio per chunk
       let chunksSent = 0;
       for (let i = 0; i < pcm.length; i += CHUNK) {
@@ -134,9 +138,16 @@ export function handleVoiceStream(ws) {
         chunksSent++;
       }
 
-      // L16 8kHz = 16000 bytes/sec. Estimate playback duration to release isSpeaking.
+      // Send checkpoint — Plivo will send "playedStream" when audio finishes playing.
+      // Use this to know when to start listening again.
+      if (ws.readyState === 1 && streamId) {
+        ws.send(JSON.stringify({ event: "checkpoint", streamId, name: `speak_${Date.now()}` }));
+      }
+
+      // L16 8kHz = 16000 bytes/sec. Estimate + safety margin.
       const durationMs = Math.ceil((pcm.length / 16000) * 1000);
-      setTimeout(() => { isSpeaking = false; }, durationMs + 300);
+      // Release isSpeaking after estimated playback (Plivo may confirm earlier via playedStream)
+      setTimeout(() => { isSpeaking = false; }, durationMs + 500);
 
       logger.info({ bytes: pcm.length, chunksSent, durationMs, callUuid }, "Sent playAudio (L16, chunked)");
     } catch (err) {
