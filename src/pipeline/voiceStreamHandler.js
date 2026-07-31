@@ -130,7 +130,7 @@ export function handleVoiceStream(ws) {
         ws.send(JSON.stringify({
           event: "playAudio",
           media: {
-            contentType: "audio/x-l16",
+            contentType: "audio/x-mulaw",
             sampleRate: 8000,
             payload: slice.toString("base64"),
           },
@@ -144,8 +144,8 @@ export function handleVoiceStream(ws) {
         ws.send(JSON.stringify({ event: "checkpoint", streamId, name: `speak_${Date.now()}` }));
       }
 
-      // L16 8kHz = 16000 bytes/sec. Estimate + safety margin.
-      const durationMs = Math.ceil((pcm.length / 16000) * 1000);
+      // mulaw 8kHz = 8000 bytes/sec (1 byte per sample). Estimate + safety.
+      const durationMs = Math.ceil((pcm.length / 8000) * 1000);
       // Release isSpeaking after estimated playback (Plivo may confirm earlier via playedStream)
       setTimeout(() => { isSpeaking = false; }, durationMs + 500);
 

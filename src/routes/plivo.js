@@ -19,15 +19,15 @@ plivoRoutes.post("/inbound", (req, res) => {
 
   const wsUrl = config.publicBaseUrl.replace("https://", "wss://").replace("http://", "ws://") + "/voice-stream";
 
-  // Minimal Stream XML — this exact format connected successfully before.
+  // Force mulaw 8kHz — Plivo docs recommend this: "lowest latency, best compatibility"
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Stream bidirectional="true" keepCallAlive="true">${wsUrl}</Stream>
+  <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">${wsUrl}</Stream>
 </Response>`;
 
   res.set("Content-Type", "application/xml");
   res.send(xml);
-  logger.info({ callUuid: CallUUID, wsUrl }, "Sent Stream XML");
+  logger.info({ callUuid: CallUUID, wsUrl }, "Sent Stream XML (mulaw)");
 });
 
 plivoRoutes.post("/status", (req, res) => {

@@ -84,18 +84,18 @@ export async function synthesizeSpeech(text) {
     if (!text || text.trim().length === 0) return null;
 
     const response = await openai.audio.speech.create({
-      model: "tts-1",
-      voice: config.agent.voice,
+      model: "gpt-4o-mini-tts", // Same model as "Priya" — expressive, natural Hindi
+      voice: config.agent.voice, // "nova"
       input: text,
       response_format: "pcm", // Raw PCM 24kHz 16-bit mono
-      speed: 1.05,
+      instructions: "Speak in a warm, friendly, natural Indian Hindi/Hinglish tone. Sound like a real young Indian woman (Priya), conversational and casual. NOT robotic.",
     });
 
     const arrayBuffer = await response.arrayBuffer();
     const pcm24k = Buffer.from(arrayBuffer);
 
-    // Plivo stream is "audio/x-l16" at 8kHz → downsample 24kHz→8kHz, keep 16-bit PCM
-    return pcm24kToL16_8k(pcm24k);
+    // Plivo stream is mulaw 8kHz → downsample 24kHz→8kHz, then encode mulaw
+    return pcm24kToMulaw8k(pcm24k);
   } catch (err) {
     logger.error({ err: err.message }, "synthesizeSpeech failed");
     return null;
@@ -103,20 +103,36 @@ export async function synthesizeSpeech(text) {
 }
 
 /**
- * Convert PCM 24kHz 16-bit mono → L16 PCM 8kHz 16-bit mono (little-endian).
- * Plivo bidirectional stream uses "audio/x-l16" at 8kHz.
+ * Convert PCM 24kHz 16-bit mono → mulaw 8kHz mono.
+ * Plivo recommended: "audio/x-mulaw;rate=8000 — lowest latency, best compatibility"
  */
-function pcm24kToL16_8k(pcm24k) {
+function pcm24kToMulaw8k(pcm24k) {
   const sampleCount24k = Math.floor(pcm24k.length / 2);
   const downsampleFactor = 3; // 24000 / 8000
   const sampleCount8k = Math.floor(sampleCount24k / downsampleFactor);
-  const out = Buffer.alloc(sampleCount8k * 2);
+  const mulaw = Buffer.alloc(sampleCount8k);
 
   for (let i = 0; i < sampleCount8k; i++) {
     const srcIndex = i * downsampleFactor * 2;
     if (srcIndex + 1 >= pcm24k.length) break;
     const sample = pcm24k.readInt16LE(srcIndex);
-    out.writeInt16LE(sample, i * 2);
+    mulaw[i] = linearToMulaw(sample);
   }
-  return out;
+  return mulaw;
+}
+
+function linearToMulaw(sample) {
+  const MULAW_MAX = 0x1FFF;
+  const MULAW_BIAS = 33;
+  const sign = (sample >> 8) & 0x80;
+  if (sign !== 0) sample = -sample;
+  if (sample > MULAW_MAX) sample = MULAW_MAX;
+  sample += MULAW_BIAS;
+
+  let exponent = 7;
+  let mask = 0x4000;
+  while (exponent > 0 && (sample & mask) === 0) { exponent--; mask >>= 1; }
+
+  const mantissa = (sample >> (exponent + 3)) & 0x0F;
+  return ~(sign | (exponent << 4) | mantissa) & 0xFF;
 }

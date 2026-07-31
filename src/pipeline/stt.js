@@ -76,14 +76,8 @@ export async function transcribeAudio(rawBuffer, mediaFormat = {}) {
     const encoding = (mediaFormat.encoding || "audio/x-mulaw").toLowerCase();
     const sampleRate = mediaFormat.sampleRate || 8000;
 
-    // Build a WAV wrapper matching Plivo's encoding
-    let wavBuffer;
-    if (encoding.includes("mulaw") || encoding.includes("ulaw")) {
-      wavBuffer = wrapWav(rawBuffer, sampleRate, 7, 8); // format 7 = mu-law, 8-bit
-    } else {
-      // Assume L16 PCM (audio/x-l16)
-      wavBuffer = wrapWav(rawBuffer, sampleRate, 1, 16); // format 1 = PCM, 16-bit
-    }
+    // We force mulaw in Stream XML, so always wrap as mulaw WAV
+    const wavBuffer = wrapWav(rawBuffer, sampleRate, 7, 8); // format 7 = mu-law, 8-bit
 
     const file = new File([wavBuffer], "audio.wav", { type: "audio/wav" });
 
