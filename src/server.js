@@ -62,10 +62,7 @@ plivoServer
       const greeting = agent.greeting || "Hello! Codeskate se Priya bol rahi hoon. Kaise help karoon?";
       const audio = await synthesizeSpeech(greeting);
       if (audio) {
-        state.isSpeaking = true;
-        plivoServer.playAudio(ws, "audio/x-mulaw", 8000, audio);
-        plivoServer.checkpoint(ws, "greeting");
-        logger.info({ bytes: audio.length, callId: state.callUuid }, "Greeting sent via SDK");
+        sendAudio(ws, state, audio, "greeting");
       }
     } catch (err) {
       logger.error({ err: err.message }, "Greeting failed");
@@ -86,6 +83,7 @@ plivoServer
   .onPlayedStream((event, ws) => {
     const state = connectionState.get(ws);
     if (state) {
+      if (state.speakTimer) clearTimeout(state.speakTimer);
       state.isSpeaking = false;
       logger.info({ name: event.name, callId: state?.callUuid }, "Playback confirmed — now listening");
     }
@@ -100,6 +98,7 @@ plivoServer
   .onClose((ws) => {
     const state = connectionState.get(ws);
     if (state?.silenceTimer) clearTimeout(state.silenceTimer);
+    if (state?.speakTimer) clearTimeout(state.speakTimer);
     logger.info({ callId: state?.callUuid }, "Connection closed");
   })
   .start();
@@ -137,13 +136,37 @@ async function processTurn(ws) {
     // TTS + Play via SDK
     const audio = await synthesizeSpeech(reply);
     if (audio && plivoServer.isActive(ws)) {
-      state.isSpeaking = true;
-      plivoServer.playAudio(ws, "audio/x-mulaw", 8000, audio);
-      plivoServer.checkpoint(ws, `reply_${Date.now()}`);
+      sendAudio(ws, state, audio, `reply_${Date.now()}`);
     }
   } catch (err) {
     logger.error({ err: err.message, callId: state.callUuid }, "Turn error");
   }
 
   state.isProcessing = false;
+}
+
+/**
+ * Send audio and manage isSpeaking flag with a TIMER FALLBACK.
+ *
+ * Critical: we do NOT rely only on Plivo's playedStream event to release
+ * isSpeaking (it may not fire reliably). We also set a timer based on the
+ * audio's actual duration so the AI always resumes listening.
+ * mulaw 8kHz = 8000 bytes/sec.
+ */
+function sendAudio(ws, state, audio, name) {
+  state.isSpeaking = true;
+  plivoServer.playAudio(ws, "audio/x-mulaw", 8000, audio);
+  plivoServer.checkpoint(ws, name);
+
+  const durationMs = Math.ceil((audio.length / 8000) * 1000);
+  // Fallback: release isSpeaking after playback duration + 400ms buffer
+  if (state.speakTimer) clearTimeout(state.speakTimer);
+  state.speakTimer = setTimeout(() => {
+    if (state.isSpeaking) {
+      state.isSpeaking = false;
+      logger.info({ name, callId: state.callUuid }, "isSpeaking released by timer fallback");
+    }
+  }, durationMs + 400);
+
+  logger.info({ bytes: audio.length, durationMs, name, callId: state.callUuid }, "Audio sent");
 }
